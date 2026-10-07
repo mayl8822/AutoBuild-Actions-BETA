@@ -87,9 +87,6 @@ Firmware_Diy_Start() {
 		TARGET_FLAG="${Tempoary_FLAG}"
 	fi
 	case "${TARGET_BOARD}" in
-	x86)
-		AutoBuild_Fw="AutoBuild-${OP_REPO}-${TARGET_PROFILE}-${OP_VERSION}-BOOT-${TARGET_FLAG}-SHA256.FORMAT"
-	;;
 	*)
 		AutoBuild_Fw="AutoBuild-${OP_REPO}-${TARGET_PROFILE}-${OP_VERSION}-${TARGET_FLAG}-SHA256.FORMAT"
 	;;
@@ -169,11 +166,14 @@ EOF
 		;;
 		immortalwrt/immortalwrt | padavanonly/immortalwrtARM | hanwckf/immortalwrt-mt798x)
 			Copy ${CustomFiles}/Depends/openwrt_release_immortalwrt ${BASE_FILES}/etc openwrt_release
+			Copy ${CustomFiles}/Depends/os-release_immortalwrt ${BASE_FILES}/usr/lib os-release
 			if [[ -n ${TARGET_FLAG} ]]
 			then
 				sed -i "s?ImmortalWrt?ImmortalWrt ${TARGET_FLAG} @ ${Author} [${Display_Date}]?g" ${Version_File}
+				sed -i "s?ImmortalWrt?ImmortalWrt ${TARGET_FLAG} @ ${Author} [${Display_Date}]?g" ${BASE_FILES}/usr/lib/os-release
 			else
 				sed -i "s?ImmortalWrt?ImmortalWrt @ ${Author} [${Display_Date}]?g" ${Version_File}
+				sed -i "s?ImmortalWrt?ImmortalWrt @ ${Author} [${Display_Date}]?g" ${BASE_FILES}/usr/lib/os-release
 			fi
 		;;
 		esac
@@ -328,10 +328,12 @@ Firmware_Diy_End() {
 	ECHO "[$(date "+%H:%M:%S")] Actions Avaliable: $(df -h | grep "/dev/root" | awk '{printf $4}')"
 	cd ${WORK}
 	echo -e "### FIRMWARE OUTPUT ###"
-	du -ah bin/targets | egrep -v "${Regex_Skip}"
+	du -ah bin/targets | egrep -v "${Regex_Skip}" | grep -v 'ipk'
 	MKDIR ${WORK}/bin/Firmware
 	Fw_Path="${WORK}/bin/targets/${TARGET_BOARD}/${TARGET_SUBTARGET}"
 	cd "${Fw_Path}"
+	echo -e "### SHA256SUMS ###"
+	cat sha256sums
 	case "${TARGET_BOARD}" in
 	x86)
 		if [[ ${x86_Full_Images} == true ]]
@@ -369,22 +371,29 @@ Process_Fw_Core() {
 	Fw_Format=$1
 	shift
 	while [[ $1 ]];do
-		Fw=${AutoBuild_Fw}
 		case "${TARGET_BOARD}" in
 		x86)
-			[[ $1 =~ efi ]] && Fw_Boot=UEFI || Fw_Boot=BIOS
-			Fw=${Fw/BOOT/${Fw_Boot}}
+			if [[ $1 =~ efi ]]
+			then
+				Fw=${AutoBuild_Fw/SHA256/$(Get_sha256 $1)}
+				Fw=${Fw/FORMAT/${Fw_Format}}
+				if [[ -f $1 ]]
+				then
+					ECHO "Move x86 image [$1] to [${Fw}] ..."
+					mv -f $1 ${Fw}
+				fi
+			fi
+		;;
+		*)
+			Fw=${AutoBuild_Fw/SHA256/$(Get_sha256 $1)}
+			Fw=${Fw/FORMAT/${Fw_Format}}
+			if [[ -f $1 ]]
+			then
+				ECHO "Move generic firmware [$1] to [${Fw}] ..."
+				mv -f $1 ${Fw}
+			fi
 		;;
 		esac
-		Fw=${Fw/SHA256/$(Get_sha256 $1)}
-		Fw=${Fw/FORMAT/${Fw_Format}}
-		if [[ -f $1 ]]
-		then
-			ECHO "Copy [$1] to [${Fw}] ..."
-			cp -a $1 ${Fw}
-		else
-			ECHO "Failed to copy [${Fw}] ..."
-		fi
 		shift
 	done
 }
@@ -538,11 +547,15 @@ ReleaseDL() {
 	fi
 	
 	rm -f ${API_FILE}
+	ECHO "Start to download API ${PKG_NAME} ..."
 	wget --quiet --no-check-certificate --tries 5 --timeout 20 $1 -O ${API_FILE}
 	if [[ $? != 0 || ! -f ${API_FILE} ]]
 	then
 		ECHO "Failed to download API ${PKG_NAME} ..."
+	else
+		ECHO "Downloaded API ${PKG_NAME} ..."
 	fi
+	
 	for i in $(seq 0 $(cat ${API_FILE} | jq ".assets | length" 2> /dev/null))
 	do
 		eval name=$(cat ${API_FILE} | jq ".assets[${i}].name" 2> /dev/null)
@@ -579,7 +592,7 @@ ClashDL() {
 	PLATFORM=$1
 	CORE_TYPE=$2
 	
-	if [[ ! $(ls -1 $TMP_PATH) ]]
+	if [[ ! -n $(ls -1 $TMP_PATH 2> /dev/null) ]]
 	then
 		git clone -b core --depth=1 https://github.com/vernesong/OpenClash $TMP_PATH
 	fi
